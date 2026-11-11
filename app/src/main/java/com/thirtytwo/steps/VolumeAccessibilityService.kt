@@ -143,9 +143,10 @@ class VolumeAccessibilityService : AccessibilityService() {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
                 }
                 try {
-                    startActivity(intent)
                     handler.postDelayed(stepTimeoutRunnable, stepTimeoutMs)
+                    startActivity(intent)
                 } catch (e: Exception) {
+                    handler.removeCallbacks(stepTimeoutRunnable)
                     Log.e("32StepsBgVolume", "Could not start background volume activity", e)
                     stepInFlight = false
                     processNextVolumeStep()
