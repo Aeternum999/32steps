@@ -86,6 +86,18 @@ class AudioService : Service() {
             }
         }
         when (intent?.action) {
+            ACTION_PREPARE_BACKGROUND_VOLUME -> {
+                // Make the overlay visible before the short-lived Activity launch.
+                // Realme/Oppo firmware may require a visible app window for BAL.
+                val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                val label = when (am.mode) {
+                    android.media.AudioManager.MODE_IN_CALL,
+                    android.media.AudioManager.MODE_IN_COMMUNICATION -> "Call"
+                    android.media.AudioManager.MODE_RINGTONE -> "Ring"
+                    else -> "Media"
+                }
+                overlay?.show(volumeController.currentStep, volumeController.totalSteps, label)
+            }
             ACTION_APPLY_PROFILE -> applySavedProfile()
             ACTION_CLEAR_PROFILE -> volumeController.setSoundProfile(null)
         }
@@ -210,6 +222,7 @@ class AudioService : Service() {
         const val ACTION_DETACH_SESSION = "com.thirtytwo.steps.DETACH_SESSION"
         const val ACTION_APPLY_PROFILE = "com.thirtytwo.steps.APPLY_PROFILE"
         const val ACTION_CLEAR_PROFILE = "com.thirtytwo.steps.CLEAR_PROFILE"
+        const val ACTION_PREPARE_BACKGROUND_VOLUME = "com.thirtytwo.steps.PREPARE_BACKGROUND_VOLUME"
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_PACKAGE_NAME = "package_name"
 
