@@ -1,7 +1,10 @@
 package com.thirtytwo.steps
 
 import android.accessibilityservice.AccessibilityService
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +14,7 @@ import android.os.VibratorManager
 import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import java.util.ArrayDeque
 
 class VolumeAccessibilityService : AccessibilityService() {
 
@@ -21,38 +25,52 @@ class VolumeAccessibilityService : AccessibilityService() {
 
     // Hold-to-repeat state
     private var holdingKey: Int? = null
-    private var repeatCount = 0
-    private var lastActionDownTime = 0L
 
-    // Initial delay before repeat starts. Keep a steady pace so background
-    // Activity launches do not overlap and make the overlay appear choppy.
+    // Every physical press is queued and processed in order. This prevents
+    // quick taps from being lost while the short-lived Activity is starting.
+    private val pendingDirections = ArrayDeque<Int>()
+    private var stepInFlight = false
+    private val stepTimeoutMs = 1500L
+    private val activityLaunchDelayMs = 80L
+
     private val initialRepeatDelayMs = 400L
-    private val repeatIntervalMs = 180L
+    private val repeatIntervalMs = 220L
 
     private val repeatRunnable = object : Runnable {
         override fun run() {
-            // Safety: if screen is no longer interactive (power pressed), stop repeating
-            val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+            val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             if (!pm.isInteractive) {
                 holdingKey = null
                 return
             }
             holdingKey?.let { key ->
-                performVolumeStep(key)
+                enqueueVolumeStep(key)
                 tick()
-                repeatCount++
                 handler.postDelayed(this, repeatIntervalMs)
             }
         }
     }
 
-    private var isTv = false
+    private val stepTimeoutRunnable = Runnable {
+        // Recover if Android/OEM prevents the completion broadcast from arriving.
+        stepInFlight = false
+        processNextVolumeStep()
+    }
+
+    private val stepCompletedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BackgroundVolumeActivity.ACTION_STEP_COMPLETED) {
+                handler.removeCallbacks(stepTimeoutRunnable)
+                stepInFlight = false
+                processNextVolumeStep()
+            }
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         volumeController = VolumeController.getInstance(this)
         prefs = PrefsManager(this)
-        isTv = packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
 
         try {
             vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -63,8 +81,15 @@ class VolumeAccessibilityService : AccessibilityService() {
             }
         } catch (_: Throwable) {}
 
-        val intent = Intent(this, AudioService::class.java)
-        startForegroundService(intent)
+        val filter = IntentFilter(BackgroundVolumeActivity.ACTION_STEP_COMPLETED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(stepCompletedReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(stepCompletedReceiver, filter)
+        }
+
+        startForegroundService(Intent(this, AudioService::class.java))
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -72,16 +97,13 @@ class VolumeAccessibilityService : AccessibilityService() {
 
         val isVolumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
                 event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-
         if (!isVolumeKey) return false
 
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
-                lastActionDownTime = System.currentTimeMillis()
                 if (holdingKey == null) {
                     holdingKey = event.keyCode
-                    repeatCount = 0
-                    performVolumeStep(event.keyCode)
+                    enqueueVolumeStep(event.keyCode)
                     tick()
                     handler.postDelayed(repeatRunnable, initialRepeatDelayMs)
                 }
@@ -91,24 +113,26 @@ class VolumeAccessibilityService : AccessibilityService() {
                 handler.removeCallbacks(repeatRunnable)
             }
         }
-
         return true
     }
 
-    /**
-     * Route the step through a short-lived NoDisplay Activity. This is the
-     * Realme/Oppo background setStreamVolume workaround experiment.
-     */
-    private fun performVolumeStep(keyCode: Int) {
+    private fun enqueueVolumeStep(keyCode: Int) {
         val direction = when (keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP -> BackgroundVolumeActivity.DIRECTION_UP
             KeyEvent.KEYCODE_VOLUME_DOWN -> BackgroundVolumeActivity.DIRECTION_DOWN
             else -> return
         }
+        pendingDirections.addLast(direction)
+        processNextVolumeStep()
+    }
+
+    private fun processNextVolumeStep() {
+        if (stepInFlight || pendingDirections.isEmpty()) return
+
+        val direction = pendingDirections.removeFirst()
+        stepInFlight = true
 
         try {
-            // Ask the already-running foreground service to show its overlay first.
-            // A short delay gives WindowManager time to attach the visible window.
             startService(Intent(this, AudioService::class.java).apply {
                 action = AudioService.ACTION_PREPARE_BACKGROUND_VOLUME
             })
@@ -120,12 +144,17 @@ class VolumeAccessibilityService : AccessibilityService() {
                 }
                 try {
                     startActivity(intent)
+                    handler.postDelayed(stepTimeoutRunnable, stepTimeoutMs)
                 } catch (e: Exception) {
                     Log.e("32StepsBgVolume", "Could not start background volume activity", e)
+                    stepInFlight = false
+                    processNextVolumeStep()
                 }
-            }, 120L)
+            }, activityLaunchDelayMs)
         } catch (e: Exception) {
-            Log.e("32StepsBgVolume", "Could not start background volume activity", e)
+            Log.e("32StepsBgVolume", "Could not prepare background volume activity", e)
+            stepInFlight = false
+            processNextVolumeStep()
         }
     }
 
@@ -146,5 +175,14 @@ class VolumeAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         holdingKey = null
         handler.removeCallbacks(repeatRunnable)
+        pendingDirections.clear()
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        try {
+            unregisterReceiver(stepCompletedReceiver)
+        } catch (_: Throwable) {}
+        super.onDestroy()
     }
 }
