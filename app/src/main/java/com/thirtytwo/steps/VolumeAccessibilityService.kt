@@ -24,11 +24,10 @@ class VolumeAccessibilityService : AccessibilityService() {
     private var repeatCount = 0
     private var lastActionDownTime = 0L
 
-    // Initial delay before repeat starts, then accelerates
+    // Initial delay before repeat starts. Keep a steady pace so background
+    // Activity launches do not overlap and make the overlay appear choppy.
     private val initialRepeatDelayMs = 400L
-    private val repeatIntervalMs = 80L
-    private val fastRepeatIntervalMs = 40L
-    private val fastRepeatAfter = 8
+    private val repeatIntervalMs = 180L
 
     private val repeatRunnable = object : Runnable {
         override fun run() {
@@ -42,8 +41,7 @@ class VolumeAccessibilityService : AccessibilityService() {
                 performVolumeStep(key)
                 tick()
                 repeatCount++
-                val interval = if (repeatCount > fastRepeatAfter) fastRepeatIntervalMs else repeatIntervalMs
-                handler.postDelayed(this, interval)
+                handler.postDelayed(this, repeatIntervalMs)
             }
         }
     }
