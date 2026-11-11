@@ -109,11 +109,23 @@ class VolumeAccessibilityService : AccessibilityService() {
         }
 
         try {
-            val intent = Intent(this, BackgroundVolumeActivity::class.java).apply {
-                putExtra(BackgroundVolumeActivity.EXTRA_DIRECTION, direction)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-            }
-            startActivity(intent)
+            // Ask the already-running foreground service to show its overlay first.
+            // A short delay gives WindowManager time to attach the visible window.
+            startService(Intent(this, AudioService::class.java).apply {
+                action = AudioService.ACTION_PREPARE_BACKGROUND_VOLUME
+            })
+
+            handler.postDelayed({
+                val intent = Intent(this, BackgroundVolumeActivity::class.java).apply {
+                    putExtra(BackgroundVolumeActivity.EXTRA_DIRECTION, direction)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                }
+                try {
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e("32StepsBgVolume", "Could not start background volume activity", e)
+                }
+            }, 120L)
         } catch (e: Exception) {
             Log.e("32StepsBgVolume", "Could not start background volume activity", e)
         }
