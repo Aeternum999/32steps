@@ -8,6 +8,7 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Log
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 
@@ -38,10 +39,7 @@ class VolumeAccessibilityService : AccessibilityService() {
                 return
             }
             holdingKey?.let { key ->
-                when (key) {
-                    KeyEvent.KEYCODE_VOLUME_UP -> volumeController.stepUp()
-                    KeyEvent.KEYCODE_VOLUME_DOWN -> volumeController.stepDown()
-                }
+                performVolumeStep(key)
                 tick()
                 repeatCount++
                 val interval = if (repeatCount > fastRepeatAfter) fastRepeatIntervalMs else repeatIntervalMs
@@ -85,10 +83,7 @@ class VolumeAccessibilityService : AccessibilityService() {
                 if (holdingKey == null) {
                     holdingKey = event.keyCode
                     repeatCount = 0
-                    when (event.keyCode) {
-                        KeyEvent.KEYCODE_VOLUME_UP -> volumeController.stepUp()
-                        KeyEvent.KEYCODE_VOLUME_DOWN -> volumeController.stepDown()
-                    }
+                    performVolumeStep(event.keyCode)
                     tick()
                     handler.postDelayed(repeatRunnable, initialRepeatDelayMs)
                 }
@@ -100,6 +95,28 @@ class VolumeAccessibilityService : AccessibilityService() {
         }
 
         return true
+    }
+
+    /**
+     * Route the step through a short-lived NoDisplay Activity. This is the
+     * Realme/Oppo background setStreamVolume workaround experiment.
+     */
+    private fun performVolumeStep(keyCode: Int) {
+        val direction = when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> BackgroundVolumeActivity.DIRECTION_UP
+            KeyEvent.KEYCODE_VOLUME_DOWN -> BackgroundVolumeActivity.DIRECTION_DOWN
+            else -> return
+        }
+
+        try {
+            val intent = Intent(this, BackgroundVolumeActivity::class.java).apply {
+                putExtra(BackgroundVolumeActivity.EXTRA_DIRECTION, direction)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e("32StepsBgVolume", "Could not start background volume activity", e)
+        }
     }
 
     private fun tick() {
