@@ -31,7 +31,6 @@ class VolumeAccessibilityService : AccessibilityService() {
     private val pendingDirections = ArrayDeque<Int>()
     private var stepInFlight = false
     private val stepTimeoutMs = 1500L
-    private val activityLaunchDelayMs = 80L
 
     private val initialRepeatDelayMs = 400L
     private val repeatIntervalMs = 220L
@@ -133,26 +132,16 @@ class VolumeAccessibilityService : AccessibilityService() {
         stepInFlight = true
 
         try {
+            // AudioService waits until the overlay is attached and drawn before
+            // launching the short-lived activity. A fixed delay was racy on OEM
+            // builds because VolumeOverlay.show() itself posts work to the UI thread.
+            handler.postDelayed(stepTimeoutRunnable, stepTimeoutMs)
             startService(Intent(this, AudioService::class.java).apply {
                 action = AudioService.ACTION_PREPARE_BACKGROUND_VOLUME
+                putExtra(AudioService.EXTRA_VOLUME_DIRECTION, direction)
             })
-
-            handler.postDelayed({
-                val intent = Intent(this, BackgroundVolumeActivity::class.java).apply {
-                    putExtra(BackgroundVolumeActivity.EXTRA_DIRECTION, direction)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                }
-                try {
-                    handler.postDelayed(stepTimeoutRunnable, stepTimeoutMs)
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    handler.removeCallbacks(stepTimeoutRunnable)
-                    Log.e("32StepsBgVolume", "Could not start background volume activity", e)
-                    stepInFlight = false
-                    processNextVolumeStep()
-                }
-            }, activityLaunchDelayMs)
         } catch (e: Exception) {
+            handler.removeCallbacks(stepTimeoutRunnable)
             Log.e("32StepsBgVolume", "Could not prepare background volume activity", e)
             stepInFlight = false
             processNextVolumeStep()
