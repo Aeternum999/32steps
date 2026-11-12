@@ -84,7 +84,12 @@ class VolumeOverlay(private val context: Context) {
 
     private var mediaLabel: android.widget.TextView? = null
 
-    fun show(currentStep: Int, totalSteps: Int, streamLabel: String = "Media") {
+    fun show(
+        currentStep: Int,
+        totalSteps: Int,
+        streamLabel: String = "Media",
+        onShown: (() -> Unit)? = null
+    ) {
         handler.post {
             hideRunnable?.let { handler.removeCallbacks(it) }
 
@@ -142,6 +147,13 @@ class VolumeOverlay(private val context: Context) {
             if (!isDragging && !isExpanded) {
                 hideRunnable = Runnable { hide() }
                 handler.postDelayed(hideRunnable!!, hideDelay)
+            }
+
+            // Run only after the overlay has been attached and had a frame to draw.
+            // This gives Android/OEM window managers time to recognize the visible
+            // overlay before the service attempts a background Activity launch.
+            if (onShown != null) {
+                overlayView?.postOnAnimation { onShown.invoke() }
             }
         }
     }
