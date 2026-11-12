@@ -87,8 +87,9 @@ class AudioService : Service() {
         }
         when (intent?.action) {
             ACTION_PREPARE_BACKGROUND_VOLUME -> {
-                // Make the overlay visible before the short-lived Activity launch.
-                // Realme/Oppo firmware may require a visible app window for BAL.
+                // Wait for the overlay to be attached and drawn before launching
+                // the NoDisplay Activity. A fixed delay from AccessibilityService
+                // was unreliable because show() is asynchronous on the UI thread.
                 val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
                 val label = when (am.mode) {
                     android.media.AudioManager.MODE_IN_CALL,
@@ -96,7 +97,23 @@ class AudioService : Service() {
                     android.media.AudioManager.MODE_RINGTONE -> "Ring"
                     else -> "Media"
                 }
-                overlay?.show(volumeController.currentStep, volumeController.totalSteps, label)
+                val direction = intent.getIntExtra(EXTRA_VOLUME_DIRECTION, 0)
+                overlay?.show(volumeController.currentStep, volumeController.totalSteps, label) {
+                    if (direction != BackgroundVolumeActivity.DIRECTION_UP &&
+                        direction != BackgroundVolumeActivity.DIRECTION_DOWN) {
+                        android.util.Log.e("32StepsBgVolume", "Invalid background volume direction: $direction")
+                        return@show
+                    }
+                    val activityIntent = Intent(this, BackgroundVolumeActivity::class.java).apply {
+                        putExtra(BackgroundVolumeActivity.EXTRA_DIRECTION, direction)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+                    }
+                    try {
+                        startActivity(activityIntent)
+                    } catch (e: Exception) {
+                        android.util.Log.e("32StepsBgVolume", "Could not start background volume activity after overlay draw", e)
+                    }
+                }
             }
             ACTION_APPLY_PROFILE -> applySavedProfile()
             ACTION_CLEAR_PROFILE -> volumeController.setSoundProfile(null)
@@ -223,6 +240,7 @@ class AudioService : Service() {
         const val ACTION_APPLY_PROFILE = "com.thirtytwo.steps.APPLY_PROFILE"
         const val ACTION_CLEAR_PROFILE = "com.thirtytwo.steps.CLEAR_PROFILE"
         const val ACTION_PREPARE_BACKGROUND_VOLUME = "com.thirtytwo.steps.PREPARE_BACKGROUND_VOLUME"
+        const val EXTRA_VOLUME_DIRECTION = "volume_direction"
         const val EXTRA_SESSION_ID = "session_id"
         const val EXTRA_PACKAGE_NAME = "package_name"
 
