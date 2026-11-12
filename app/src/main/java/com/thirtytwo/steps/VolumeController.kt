@@ -10,6 +10,7 @@ import android.media.audiofx.Virtualizer
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.ln
@@ -245,6 +246,7 @@ class VolumeController(private val context: Context) {
         val (targetVol, gainOffset) = if (newStep < stepTable.size) stepTable[newStep]
             else computeMappingFallback(newStep)
         val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        Log.w("32StepsDiag", "setStep step=$newStep/$totalSteps stream=$stream mode=${audioManager.mode} target=$targetVol current=$currentVol max=$systemMax")
 
         if (targetVol != currentVol) {
             val now = System.currentTimeMillis()
@@ -863,10 +865,19 @@ class VolumeController(private val context: Context) {
     // ──────────────────────────────────────────────
 
     private fun setSystemVolume(stream: Int, volume: Int) {
+        val before = try { audioManager.getStreamVolume(stream) } catch (t: Throwable) { -1 }
+        Log.w("32StepsDiag", "SET begin stream=$stream requested=$volume before=$before mode=${audioManager.mode} thread=${Thread.currentThread().name}")
         selfChanging = true
-        audioManager.setStreamVolume(stream, volume, 0)
-        lastSystemVol = volume
-        selfChanging = false
+        try {
+            audioManager.setStreamVolume(stream, volume, 0)
+            val after = audioManager.getStreamVolume(stream)
+            lastSystemVol = after
+            Log.w("32StepsDiag", "SET success stream=$stream requested=$volume before=$before after=$after max=${audioManager.getStreamMaxVolume(stream)}")
+        } catch (t: Throwable) {
+            Log.e("32StepsDiag", "SET FAILED stream=$stream requested=$volume before=$before", t)
+        } finally {
+            selfChanging = false
+        }
     }
 
     private fun setAllGain(mb: Int) {
