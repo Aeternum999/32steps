@@ -98,22 +98,19 @@ class AudioService : Service() {
                     else -> "Media"
                 }
                 val direction = intent.getIntExtra(EXTRA_VOLUME_DIRECTION, 0)
-                overlay?.show(volumeController.currentStep, volumeController.totalSteps, label) {
-                    if (direction != BackgroundVolumeActivity.DIRECTION_UP &&
-                        direction != BackgroundVolumeActivity.DIRECTION_DOWN) {
+                // Change volume directly inside this already-running foreground service.
+                // This avoids launching an Activity from the background, which some OEM
+                // Android builds (including Realme UI) may block even with an overlay.
+                when (direction) {
+                    BackgroundVolumeActivity.DIRECTION_UP -> volumeController.stepUp()
+                    BackgroundVolumeActivity.DIRECTION_DOWN -> volumeController.stepDown()
+                    else -> {
                         android.util.Log.e("32StepsBgVolume", "Invalid background volume direction: $direction")
-                        return@show
-                    }
-                    val activityIntent = Intent(this, BackgroundVolumeActivity::class.java).apply {
-                        putExtra(BackgroundVolumeActivity.EXTRA_DIRECTION, direction)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
-                    }
-                    try {
-                        startActivity(activityIntent)
-                    } catch (e: Exception) {
-                        android.util.Log.e("32StepsBgVolume", "Could not start background volume activity after overlay draw", e)
+                        return START_STICKY
                     }
                 }
+                // The accessibility service processes queued key presses one at a time.
+                sendBroadcast(Intent(BackgroundVolumeActivity.ACTION_STEP_COMPLETED).setPackage(packageName))
             }
             ACTION_APPLY_PROFILE -> applySavedProfile()
             ACTION_CLEAR_PROFILE -> volumeController.setSoundProfile(null)
